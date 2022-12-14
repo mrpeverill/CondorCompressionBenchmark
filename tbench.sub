@@ -1,0 +1,20 @@
+# Software build file
+
+universe = vanilla
+executable=tbench.sh
+log = tbench_$(codec)_$(opt)_$(threads)_$(Cluster).log
+output = tbench_$(codec)_$(opt)_$(threads)_$(Cluster).out
+error = tbench_$(codec)_$(opt)_$(threads)_$(Cluster).err
+arguments = $(codec) $(opt) $(threads)
+
+# change the name of the file to be the name of your source code
+transfer_input_files = program.tar.gz
+transfer_output_files = turbobench_$(codec)_level$(opt)_$(threads)core.csv,turbobench_$(codec)_level$(opt)_$(threads)core.tbb
+
+# requirements = (OpSysMajorVer =?= 8)
+request_cpus = $(threads)
+request_memory = $(mem)GB
+request_disk = 8GB
+Requirements = (Target.HasCHTCProjects == true)
+
+queue codec,opt,threads,mem from codecs.csv

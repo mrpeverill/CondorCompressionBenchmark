@@ -1,13 +1,13 @@
 # This file is for an interactive session, with data to be taken from the log and output.
 
 universe = vanilla
-executable=$(script)
-log = manual_$(script)_$(threads)proc_$(Cluster).log
-output = manual_$(script)_$(threads)proc_$(Cluster).out
-error = manual_$(script)_$(threads)proc_$(Cluster).err
+executable=tgzip.sh
+log = tgzip_$(threads)proc_$(Cluster).log
+output = tgzip_$(threads)proc_$(Cluster).out
+error = tgzip_$(threads)proc_$(Cluster).err
 
 # change the name of the file to be the name of your source code
-transfer_input_files = blosc.tar.gz
+#transfer_input_files = 
 transfer_output_files = ""
 
 # requirements = (OpSysMajorVer =?= 8)
@@ -16,4 +16,4 @@ request_memory = $(mem)GB
 request_disk = 8GB
 Requirements = (Target.HasCHTCProjects == true)
 
-queue script,threads,mem from manualjobs.csv
+queue threads,mem from gzipjobs.csv

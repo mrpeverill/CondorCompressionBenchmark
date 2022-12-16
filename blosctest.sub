@@ -1,0 +1,23 @@
+# This file is for an interactive session, with data to be taken from the log and output.
+
+universe = vanilla
+#executable=tgzip.sh
+log = blosc_1proc_$(Cluster).log
+output = blosc_1proc_$(Cluster).out
+error = blosc_1proc_$(Cluster).err
+
+# change the name of the file to be the name of your source code
+#python-blosc2:
+#transfer_input_files = http://proxy.chtc.wisc.edu/SQUID/chtc/el8/python37.tar.gz,python-blosc.tar.gz,tgzip.sh
+#c-blosc2:
+transfer_input_files = blosc.tar.gz
+
+transfer_output_files = blosc_out.txt
+
+# requirements = (OpSysMajorVer =?= 8)
+request_cpus = 1
+request_memory = 8GB
+request_disk = 8GB
+Requirements = (Target.HasCHTCProjects == true)
+
+queue 1

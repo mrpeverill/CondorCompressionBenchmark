@@ -17,4 +17,4 @@ request_memory = $(mem)GB
 request_disk = 8GB
 Requirements = (Target.HasCHTCProjects == true)
 
-queue codec,opt,threads,mem from codecs.csv
+queue codec,opt,threads,mem from codecs2.csv

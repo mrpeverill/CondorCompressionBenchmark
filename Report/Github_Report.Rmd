@@ -1,0 +1,222 @@
+---
+title: "Comparison of Compression Methods for Neuroimaging Data."
+author: "Matthew Peverill"
+date: "`r Sys.Date()`"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE,OUTPUT=FALSE,WARNING=FALSE,MESSAGE=FALSE)
+library(tidyverse); library(ggthemes); theme_set(theme_tufte())
+```
+
+We are working on a pre-processing pipeline for a large neuroimaging dataset, and we want to be sure we are being judicious with our disk space usage. .nii Files are, conventionally, compressed with the program gzip (sometimes wrapped around a tape archive or tar file). Gzip is ubiquitously available, has a low memory footprint, and does an ok job. However, there are other perfectly mature, lossless compression formats available which get better results. If you are working with >100TB of data, this could matter a lot to your operating costs. Since compression performance is dependent on the type of data you had, I wanted to compare the efficiency of a number of algorithms and see what our options were.
+
+# Algorithms we are comparing.
+
+```{r importTbench, include=FALSE}
+library(stringr)
+
+import_tbb <- function(filename) {
+  regex<-"turbobench_([a-zA-Z1-9]*)_level([1-9x]*)_(1)core\\.tbb"
+  file_matches<-str_match(filename,regex)
+  namedata<-data.frame(method=file_matches[2],
+                       level=file_matches[3],
+                       cores=file_matches[4])
+  filedata<-read.table(filename,header=TRUE)[,c("size",
+                                                "csize",
+                                                "dtime",
+                                                "ctime",
+                                                "cmem",
+                                                "dmem")]
+  cbind(namedata,filedata)
+}
+
+path<-"../tbench_data/"
+files<-list.files(path,"*1core.tbb")
+filepaths<-file.path(path,files)
+df<-do.call("rbind", lapply(filepaths, import_tbb))
+df$ratio<-df$csize/df$size
+df[df$level=="x","level"]<-"N/A"
+```
+
+```{r importgzip,include=FALSE}
+#tgzip_1proc_*.err:
+#subject.tar:	 17.9% -- replaced with subject.tar.gz
+#time: 	157.55 realSeconds 	2200 peakMem
+#subject.tar.gz:	 17.9% -- replaced with subject.tar
+#time: 	31.68 realSeconds 	3092 peakMem
+df[nrow(df) + 1,] = c("gzip","N/A","1",NA,NA,31.68,157.55,2200,3092,1-.179)
+
+#Some recoding:
+
+df$clabel<-paste0("L",df$level,"–",gdata::humanReadable(as.numeric(df$cmem),standar="SI",justify="none"))
+df$dlabel<-paste0("L",df$level,"–",gdata::humanReadable(as.numeric(df$dmem),standar="SI",justify="none"))
+df$method<-factor(df$method)
+df$ratio<-as.numeric(df$ratio)
+df$ctime<-as.numeric(df$ctime)
+df$dtime<-as.numeric(df$dtime)
+df$cmem<-as.numeric(df$cmem)
+df$dmem<-as.numeric(df$dmem)
+df$bigmem<-factor(df$cmem > 500000000 | df$dmem > 500000000,labels=c("<.5GB",">.5GB"))
+```
+
+Gzip and memcpy are included for comparison. Other compression tools were chosen based on their apparent popularity (from other compression tests published online or because of their inclusion in turbobench's 'standard lineups') and to give a good range of datapoints from fast, minimally compressed to slow, highly compressed:
+
+`r pander::pander(df[,c("method","level")])`
+
+Blosc at level 11 was stopped manually after running for >12 hours.
+
+Each tool was tested once on an HTPC instance with 1 processor and 8GB of memory. I additionally evaluated some methods with an instance with 4 processors and 32 GB of memory, but didn't see large differences. Possibly Turbobench does not account for multithreading appropriately. I probably did not do this correctly -- one thread is our target use case, so I did not spend a lot of time on multithreading.
+
+Note that I am not positive the processors on the various HTPC servers used were identical, so there may be some noise in the timing data.
+
+# Tools
+
+The tool I ended up using for most of the comparisons is called [TurboBench](https://github.com/powturbo/TurboBench), which has the advantages that it tests strictly in memory, has a lot of compression algorithms available, is flexible, and was easy for me to run on our HTPC cluster.
+
+One thing Turbobench does not do is test gzip. Potentially one of the algorithms it offers is identical to gzip's but I could not discern that, so I tested gzip using a separate script.
+
+I was very curious about a library called blosc. Discussion on the [github for NRRD](https://github.com/InsightSoftwareConsortium/ITK/issues/348) suggested it might be ideal for this application. However, the lack of easily available command line tools for its use made me give up on it.
+
+All these analyses were run at UW-Madison at CHTC using HTCondor. Code for analysis is available on the [github repo](https://github.com/mrpeverill/CondorCompressionBenchmark).
+
+# Results
+
+The full data table for this analysis is in the github repository as 'fulldata.Rds'. I'm only going to plot points that are optimal on some dimension, and I'll exclude a few outliers.
+
+```{r pareto}
+library(rPref)
+# True if the method is superior in eithercompression time, decompression timd
+# or ratio than another (i.e. exclude strictly worse choices):
+df_pareto<-psel(df, low(ctime) * low(ratio) * low(dtime)) %>%
+  filter(ratio<.9)
+```
+
+```{r plot}
+library(patchwork)
+compress<-ggplot(df_pareto,aes(x=ctime,y=ratio,color=method,shape=bigmem,group=method)) + 
+  labs(title="Compression Methods",
+       subtitle="Pareto Optimal Only",
+       x="Time",
+       y="Compression Ratio",
+       shape="Memory") +
+  geom_point() +
+  geom_line() +
+  scale_x_log10(limits=c(6,10000))
+
+decompress<-ggplot(df_pareto,aes(x=dtime,y=ratio,color=method,shape=bigmem,group=method)) + 
+    labs(title="Decompression Methods",
+       subtitle="Pareto Optimal Only",
+       x="Time",
+       y="Compression Ratio",
+       shape="Memory") +
+  geom_point() +
+  geom_line() +
+  scale_x_log10()
+
+(compress + decompress) + plot_layout(guides="collect")
+```
+# Results
+
+In general, it is the compression benchmarks that seem to vary the most. Decompression is not much over 30 seconds even for the most time intensive method. flzma2 is a clear winner in these trials, with about 4% more compression than gzip. Flzma2 is not commonly available, and it would be best if we could use something less obscure. It is a fast implementation of LZMA, which is available in the package xz, so let's compare those:
+
+`r pander::pander(df[df$method=="lzma" | df$method=="flzma2",c('method','clabel','ratio','ctime')])`
+
+Lzma at level 6 is within 1.5% of flzma2 at level 9, and is faster and uses less memory. So that's probably our winner. It's also the default setting of xz. As a bonus, xz supports integrity checking as a built in, which is very nice.
+
+Here's a plot of all the 'lzma' methods:
+
+```{r lzmaplot}
+ggplot(df[df$method=="lzma" | df$method=="flzma2",],aes(x=ctime,y=ratio,color=method,shape=bigmem,group=method)) +
+  labs(title="Compression Methods",
+       subtitle="All LZMA and fLZMA2",
+       x="Time",
+       y="Compression Ratio",
+       shape="Memory") +
+  geom_point() +
+  geom_line() +
+  scale_x_log10()
+```
+
+Mind the scales -- the compression ratios are not actually that different here. 
+
+
+# 'Real World' testing
+
+So the above testing is using just memory to memory compression, which is not the environment where our compression will actually happen. What about when we do this with disk i/o? 
+
+```bash
+$ /usr/bin/time -f 'time: \t%e realSeconds \t%M peakMem' xz -zk subject.tar
+time:   1525.79 realSeconds     97608 peakMem
+$ ls -l subject.*
+-rw-rw-r-- 1 peverill peverill 3045427200 Dec 16 09:37 subject.tar
+-rw-rw-r-- 1 peverill peverill 2386532328 Dec 16 09:37 subject.tar.xz
+```
+
+So xz (lzma level 6) takes `r 1525/60` minutes to compress the data, achieves a compression ratio of `r 2386532328/3045427200`, and uses 97.6 MB of memory. It also appears to embed a file integrity check automatically. Sounds good!
+
+# What about Blosc?
+
+The promise of Blosc for this type of data is that by using a pre-filter, it can better take advantage of the fact that a nifti file is ultimately an array of 16bit numbers, and the most significant digits don't change that much (most compression algorithms do not account for this, but blosc's pre-filtering options do). Don't quote me on that, I'm following this [forum post](https://github.com/InsightSoftwareConsortium/ITK/issues/348#issuecomment-454436011). 
+
+I tried a few times to get this working with various tools, but could not realize gains (certainly not to the extent to justify using a less mature tool).
+
+With the compress_file program packaged with c-blosc2:
+
+```bash
+$ /usr/bin/time -f 'time: \t%e realSeconds \t%M peakMem' ./c-blosc2-2.6.0/build/examples/compress_file subject.tar subject.tar.b2frame
+Blosc version info: 2.6.0 ($Date:: 2022-12-08 #$)
+Compression ratio: 2904.3 MB -> 2710.9 MB (1.1x)
+Compression time: 11.2 s, 260.3 MB/s
+time:   11.15 realSeconds       5344 peakMem
+```
+
+With [bloscpack](https://github.com/Blosc/bloscpack) using default options:
+
+```bash
+$ /usr/bin/time -f 'time: \t%e realSeconds \t%M peakMem' \
+  python3 packages/bin/blpk -v -n 1 c subject.tar
+blpk: using 1 thread
+blpk: getting ready for compression
+blpk: input file is: 'subject.tar'
+blpk: output file is: 'subject.tar.blp'
+blpk: input file size: 2.84G (3045427200B)
+blpk: nchunks: 2905
+blpk: chunk_size: 1.0M (1048576B)
+blpk: last_chunk_size: 354.0K (362496B)
+blpk: output file size: 2.49G (2668748652B)
+blpk: compression ratio: 1.141144
+blpk: done
+time:   8.15 realSeconds        44392 peakMem
+```
+
+The same, but using the zstd algorithm:
+
+```bash
+$ /usr/bin/time -f 'time: \t%e realSeconds \t%M peakMem' python3 packages/bin/blpk -vn 1 c --codec zstd subject.tar
+blpk: using 1 thread
+blpk: getting ready for compression
+blpk: input file is: 'subject.tar'
+blpk: output file is: 'subject.tar.blp'
+blpk: input file size: 2.84G (3045427200B)
+blpk: nchunks: 2905
+blpk: chunk_size: 1.0M (1048576B)
+blpk: last_chunk_size: 354.0K (362496B)
+blpk: output file size: 2.15G (2306001080B)
+blpk: compression ratio: 1.320653
+blpk: done
+time:   134.08 realSeconds      51328 peakMem
+```
+
+Finally, to make sure that I was using bit-shuffling (which is supposedly where the magic happens), I wrote a custom version of the compress_file program. Assuming I did that right, here is the output:
+
+```bash
+$ /usr/bin/time -f 'time: \t%e realSeconds \t%M peakMem' c-blosc2-2.6.0/build/examples/compress_file subject.tar subject.tar.b2frame
+Blosc version info: 2.6.0 ($Date:: 2022-12-08 #$)
+Compression ratio: 2904.3 MB -> 2397.1 MB (1.2x)
+Compression time: 52.3 s, 55.5 MB/s
+time:   52.34 realSeconds       9084 peakMem
+```
+
+In fairness, the best version (zstd using bloscpack) compressed the file at 75.7% in just over two minutes, using 51MB of ram -- much superior to lzma. Also, all of these tests used typesize=8, and possibly it should be 16. However, it's not enough of a benefit to justify the additional complexity (and I ran out of time exploring it).
